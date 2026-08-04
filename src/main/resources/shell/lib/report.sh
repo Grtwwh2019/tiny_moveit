@@ -20,6 +20,8 @@ query_moveit_result() {
   [ -n "$RESULT_STATUS" ] || return 0
 
   RESULT_FOUND=1
+  _report_task_name=$(json_get_string "$HTTP_BODY" TaskName)
+  [ -n "$_report_task_name" ] && TASK_NAME=$_report_task_name
   RESULT_STATUS_CODE=$(json_get_number "$HTTP_BODY" StatusCode)
   RESULT_RUN_ID=$(json_get_number "$HTTP_BODY" RunID)
   RESULT_FILES_SENT=$(json_get_number "$HTTP_BODY" FilesSent)

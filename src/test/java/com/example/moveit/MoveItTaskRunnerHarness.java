@@ -80,7 +80,8 @@ public final class MoveItTaskRunnerHarness {
                 if (reportCalls.incrementAndGet() == 1) {
                     return "{\"items\":[]}";
                 }
-                return "{\"items\":[{\"RunID\":42,\"Status\":\"Success\","
+                return "{\"items\":[{\"RunID\":42,\"TaskName\":\"Daily Transfer\","
+                        + "\"Status\":\"Success\","
                         + "\"StatusCode\":0,\"FilesSent\":3,\"TotalBytesSent\":1234,"
                         + "\"StatusMsg\":\"Completed\","
                         + "\"EndTime\":\"2026-08-04 10:11:14\"}]}";
@@ -239,7 +240,7 @@ public final class MoveItTaskRunnerHarness {
         server.createContext("/api/v1/tasks/123/start", jsonHandler(200,
                 "{\"nominalStart\":\"2026-08-04 10:11:12.34\"}"));
         server.createContext("/api/v1/tasks/123", jsonHandler(200,
-                "{\"ID\":\"123\",\"Name\":\"Daily Transfer\"}"));
+                "{\"ID\":\"123\",\"Name\":\"orignames\"}"));
         server.createContext("/api/v1/reports/taskruns", new HttpHandler() {
             @Override
             public void handle(HttpExchange exchange) throws IOException {
