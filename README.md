@@ -124,10 +124,17 @@ java -jar moveit-task-runner-shell.jar \
 --connect-timeout-seconds=30   curl 建立连接的超时时间
 --read-timeout-seconds=60      单次 curl 请求的最长时间
 --server-host=automation-host  Web Admin 管理多个后端时指定 Automation Server
---insecure                     关闭 TLS 证书及主机名验证，仅用于受控测试环境
+--secure                       恢复 TLS 证书及主机名验证
+--insecure                     关闭 TLS 验证；2.1.3 中已是默认行为
 ```
 
 前八个参数（从 `-host` 到 `-rf`）必填，顺序不限。其余参数可选。
+
+## TLS 证书处理
+
+从 2.1.3 开始，程序默认向 curl 传入 `--insecure`，因此现有调度命令不需要增加参数即可连接使用内部自签名证书的 MOVEit 服务器。此模式会关闭证书链和主机名验证，只应在受控网络中使用。
+
+如果服务器证书链修复完成，可在原命令末尾增加 `--secure` 重新启用验证。
 
 `-rf` 使用兼容 MOVEit 命令行客户端的文本格式：
 

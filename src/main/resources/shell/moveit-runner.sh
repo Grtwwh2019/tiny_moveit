@@ -21,7 +21,9 @@ POLL_SECONDS=5
 CONNECT_TIMEOUT_SECONDS=30
 READ_TIMEOUT_SECONDS=60
 SERVER_HOST=
-INSECURE=0
+# The target Solaris environment uses an internal self-signed certificate chain.
+# Disable TLS verification by default so existing scheduler arguments do not change.
+INSECURE=1
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -40,6 +42,7 @@ while [ "$#" -gt 0 ]; do
     --connect-timeout-seconds=*) CONNECT_TIMEOUT_SECONDS=${1#*=} ;;
     --read-timeout-seconds=*) READ_TIMEOUT_SECONDS=${1#*=} ;;
     --server-host=*) SERVER_HOST=${1#*=} ;;
+    --secure) INSECURE=0 ;;
     --insecure) INSECURE=1 ;;
     *)
       emit_failure "$EXIT_INVALID_ARGUMENTS" "Unknown option: $1"

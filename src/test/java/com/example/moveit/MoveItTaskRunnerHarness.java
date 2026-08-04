@@ -105,6 +105,8 @@ public final class MoveItTaskRunnerHarness {
         assertContains(readFile(files.steps), "<Action>send</Action>",
                 "steps XML output");
         String content = readFile(files.debug);
+        assertContains(content, "TLS certificate and hostname verification are disabled",
+                "default self-signed certificate compatibility mode");
         assertContains(content, "status=Success", "success log status");
         assertContains(content, "filesSent=3", "success log file count");
         assertContains(content, "Program exit code=0", "success log exit code");
