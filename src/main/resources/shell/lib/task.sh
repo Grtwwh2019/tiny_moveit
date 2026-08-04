@@ -1,15 +1,18 @@
 #!/bin/sh
 
 verify_moveit_task() {
-  http_execute \
+  authorized_http_execute \
     --request GET \
     --url "$BASE_URL/api/v1/tasks/$TASK_ID" \
     --header 'Accept: application/json' \
-    --header "Authorization: Bearer $ACCESS_TOKEN" \
     || fatal "$EXIT_COMMUNICATION_ERROR" "Task lookup failed: $HTTP_CURL_ERROR"
 
   case "$HTTP_CODE" in
-    401|403|404)
+    401)
+      fatal "$EXIT_AUTHENTICATION_FAILED" \
+        "Authorization failed after access token renewal"
+      ;;
+    403|404)
       fatal "$EXIT_TASK_NOT_FOUND_OR_FORBIDDEN" \
         "Task does not exist or access is denied, taskId=$TASK_ID, HTTP=$HTTP_CODE"
       ;;
@@ -24,12 +27,11 @@ verify_moveit_task() {
 start_moveit_task() {
   log_line INFO "Starting task, taskId=$TASK_ID"
 
-  http_execute \
+  authorized_http_execute \
     --request POST \
     --url "$BASE_URL/api/v1/tasks/$TASK_ID/start" \
     --header 'Accept: application/json' \
     --header 'Content-Type: application/json' \
-    --header "Authorization: Bearer $ACCESS_TOKEN" \
     --data '{}' \
     || fatal "$EXIT_TASK_START_FAILED" "Task start request failed: $HTTP_CURL_ERROR"
 

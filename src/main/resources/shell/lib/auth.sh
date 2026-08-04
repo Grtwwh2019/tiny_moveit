@@ -1,5 +1,10 @@
 #!/bin/sh
 
+ACCESS_TOKEN=
+TOKEN_AGE_SECONDS=0
+TOKEN_EXPIRES_IN=30
+TOKEN_REFRESH_SECONDS=20
+
 authenticate_moveit() {
   log_line INFO "Connecting to MOVEit Automation Web Admin: $BASE_URL"
 
@@ -24,5 +29,34 @@ authenticate_moveit() {
   [ -n "$ACCESS_TOKEN" ] || fatal "$EXIT_AUTHENTICATION_FAILED" \
     "Authentication response does not contain access_token"
 
-  log_line INFO "Authentication succeeded, user=$USERNAME"
+  TOKEN_EXPIRES_IN=$(json_get_number "$HTTP_BODY" expires_in)
+  is_positive_integer "$TOKEN_EXPIRES_IN" || TOKEN_EXPIRES_IN=30
+  if [ "$TOKEN_EXPIRES_IN" -gt 10 ]; then
+    TOKEN_REFRESH_SECONDS=$((TOKEN_EXPIRES_IN - 5))
+  else
+    TOKEN_REFRESH_SECONDS=1
+  fi
+  TOKEN_AGE_SECONDS=0
+
+  log_line INFO "Authentication succeeded, user=$USERNAME, expiresIn=${TOKEN_EXPIRES_IN}s"
+}
+
+ensure_moveit_token() {
+  if [ -z "$ACCESS_TOKEN" ] || [ "$TOKEN_AGE_SECONDS" -ge "$TOKEN_REFRESH_SECONDS" ]; then
+    log_line INFO "Access token is missing or near expiry; requesting a new token"
+    authenticate_moveit
+  fi
+}
+
+authorized_http_execute() {
+  ensure_moveit_token
+  http_execute "$@" --header "Authorization: Bearer $ACCESS_TOKEN" || return 1
+
+  if [ "$HTTP_CODE" = "401" ]; then
+    log_line WARN "Access token was rejected; requesting a new token and retrying once"
+    ACCESS_TOKEN=
+    authenticate_moveit
+    http_execute "$@" --header "Authorization: Bearer $ACCESS_TOKEN" || return 1
+  fi
+  return 0
 }

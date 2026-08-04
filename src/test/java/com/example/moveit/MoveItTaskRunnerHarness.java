@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Dependency-free integration test harness; run its main method after test-compile. */
@@ -25,6 +26,8 @@ public final class MoveItTaskRunnerHarness {
     private final AtomicReference<String> reportAuthorization = new AtomicReference<String>();
     private final AtomicReference<String> taskExportRequestBody = new AtomicReference<String>();
     private final AtomicReference<String> stepsExportRequestBody = new AtomicReference<String>();
+    private final AtomicInteger tokenCalls = new AtomicInteger();
+    private final AtomicBoolean rejectFirstTaskRunsToken = new AtomicBoolean();
 
     public static void main(String[] args) throws Exception {
         runTest(new TestCase() {
@@ -45,7 +48,13 @@ public final class MoveItTaskRunnerHarness {
                 harness.embeddedShellReadsPasswordFromEnvironment();
             }
         });
-        System.out.println("Integration tests passed: 3/3");
+        runTest(new TestCase() {
+            @Override
+            public void run(MoveItTaskRunnerHarness harness) throws Exception {
+                harness.expiredAccessTokenIsRenewedAndRequestRetried();
+            }
+        });
+        System.out.println("Integration tests passed: 4/4");
     }
 
     private static void runTest(TestCase testCase) throws Exception {
@@ -91,7 +100,7 @@ public final class MoveItTaskRunnerHarness {
         assertContains(reportRequestBody.get(),
                 "Status=in=(\\\"Success\\\",\\\"Failure\\\")",
                 "report status predicate");
-        assertEquals("Bearer test-token", reportAuthorization.get(), "authorization header");
+        assertEquals("Bearer test-token-1", reportAuthorization.get(), "authorization header");
         assertContains(taskExportRequestBody.get(), "\"type\":\"TaskRuns\"",
                 "task XML export type");
         assertContains(stepsExportRequestBody.get(), "\"type\":\"Activity\"",
@@ -165,6 +174,31 @@ public final class MoveItTaskRunnerHarness {
         assertEquals(false, Files.exists(files.debug), "-df:none does not create debug file");
     }
 
+    private void expiredAccessTokenIsRenewedAndRequestRetried() throws Exception {
+        rejectFirstTaskRunsToken.set(true);
+        startServer(new ReportScenario() {
+            @Override
+            String response() {
+                return "{\"items\":[{\"RunID\":8,\"Status\":\"Success\","
+                        + "\"StatusCode\":0,\"FilesSent\":1,\"TotalBytesSent\":10,"
+                        + "\"EndTime\":\"2026-08-04 10:11:17\"}]}";
+            }
+        });
+        OutputFiles files = outputFiles("moveit-shell-token-renewal");
+
+        int exitCode = MoveItTaskRunner.run(arguments(files, "secret", files.debug.toString()),
+                Collections.<String, String>emptyMap(), false);
+
+        assertEquals(0, exitCode, "renewed token exit code");
+        assertEquals(2, tokenCalls.get(), "token request count after 401");
+        assertEquals("Bearer test-token-2", reportAuthorization.get(),
+                "renewed authorization header");
+        assertContains(readFile(files.response), "ErrorCode: 0",
+                "renewed token response success code");
+        assertContains(readFile(files.debug), "requesting a new token and retrying once",
+                "token renewal log message");
+    }
+
     private OutputFiles outputFiles(String prefix) throws IOException {
         Path directory = Files.createTempDirectory(prefix);
         return new OutputFiles(
@@ -196,8 +230,10 @@ public final class MoveItTaskRunnerHarness {
             @Override
             public void handle(HttpExchange exchange) throws IOException {
                 tokenRequestBody.set(read(exchange.getRequestBody()));
+                int tokenNumber = tokenCalls.incrementAndGet();
                 respond(exchange, 200,
-                        "{\"access_token\":\"test-token\",\"token_type\":\"bearer\"}");
+                        "{\"access_token\":\"test-token-" + tokenNumber
+                                + "\",\"token_type\":\"bearer\",\"expires_in\":30}");
             }
         });
         server.createContext("/api/v1/tasks/123/start", jsonHandler(200,
@@ -207,8 +243,14 @@ public final class MoveItTaskRunnerHarness {
         server.createContext("/api/v1/reports/taskruns", new HttpHandler() {
             @Override
             public void handle(HttpExchange exchange) throws IOException {
-                reportRequestBody.set(read(exchange.getRequestBody()));
-                reportAuthorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+                String request = read(exchange.getRequestBody());
+                String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+                if (rejectFirstTaskRunsToken.compareAndSet(true, false)) {
+                    respond(exchange, 401, "{\"error\":\"invalid_token\"}");
+                    return;
+                }
+                reportRequestBody.set(request);
+                reportAuthorization.set(authorization);
                 respond(exchange, 200, scenario.response());
             }
         });

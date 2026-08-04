@@ -136,6 +136,10 @@ java -jar moveit-task-runner-shell.jar \
 
 如果服务器证书链修复完成，可在原命令末尾增加 `--secure` 重新启用验证。
 
+## Token 自动更新
+
+程序读取认证响应中的 `expires_in`，并在 Token 到期前 5 秒自动重新认证。如果 MOVEit 提前拒绝 Token 并返回 HTTP 401，程序会立即申请新 Token，然后把原请求重试一次。Token 更新完全在内嵌 Shell 中完成，现有调度参数不需要改变。
+
 `-rf` 使用兼容 MOVEit 命令行客户端的文本格式：
 
 ```text

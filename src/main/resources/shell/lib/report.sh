@@ -5,12 +5,11 @@ query_moveit_result() {
   _report_nominal=$(json_escape "$NOMINAL_START")
   _report_payload='{"predicate":"TaskID=='"$TASK_ID"';NominalStart==\"'"$_report_nominal"'\";Status=in=(\"Success\",\"Failure\")","orderBy":"!StartTime","maxCount":10}'
 
-  http_execute \
+  authorized_http_execute \
     --request POST \
     --url "$BASE_URL/api/v1/reports/taskruns" \
     --header 'Accept: application/json' \
     --header 'Content-Type: application/json' \
-    --header "Authorization: Bearer $ACCESS_TOKEN" \
     --data "$_report_payload" \
     || fatal "$EXIT_COMMUNICATION_ERROR" "Task result request failed: $HTTP_CURL_ERROR"
 
@@ -42,12 +41,11 @@ write_export_report() {
   _export_nominal=$(json_escape "$NOMINAL_START")
   _export_payload='{"type":"'"$_export_type"'","format":"XML","queryInput":{"predicate":"TaskID=='"$TASK_ID"';NominalStart==\"'"$_export_nominal"'\"","orderBy":"'"$_export_order"'","maxCount":'"$_export_max_count"'}}'
 
-  http_execute \
+  authorized_http_execute \
     --request POST \
     --url "$BASE_URL/api/v1/reports/export" \
     --header 'Accept: application/xml' \
     --header 'Content-Type: application/json' \
-    --header "Authorization: Bearer $ACCESS_TOKEN" \
     --data "$_export_payload" \
     || fatal "$EXIT_COMMUNICATION_ERROR" \
       "$_export_type report export failed: $HTTP_CURL_ERROR"
@@ -101,6 +99,7 @@ wait_for_moveit_result() {
     fi
     sleep "$_report_sleep"
     _report_elapsed=$((_report_elapsed + _report_sleep))
+    TOKEN_AGE_SECONDS=$((TOKEN_AGE_SECONDS + _report_sleep))
   done
 
   fatal "$EXIT_TIMEOUT" \
