@@ -12,21 +12,11 @@ fi
 . "$MOVEIT_SHELL_HOME/lib/task.sh"
 . "$MOVEIT_SHELL_HOME/lib/report.sh"
 
-if [ "$#" -lt 5 ]; then
-  emit_failure "$EXIT_INVALID_ARGUMENTS" \
-    "Expected 5 required arguments: <server> <username> <password|env:VAR> <taskId> <logFile>"
-  usage >&2
-  exit "$EXIT_INVALID_ARGUMENTS"
-fi
-
-SERVER=$1
-USERNAME=$2
-PASSWORD_SPEC=$3
-TASK_ID=$4
-LOG_FILE=$5
-shift 5
-
-TIMEOUT_SECONDS=3600
+SERVER=
+USERNAME=
+PASSWORD_SPEC=
+TASK_ID=
+TIMEOUT_SECONDS=
 POLL_SECONDS=5
 CONNECT_TIMEOUT_SECONDS=30
 READ_TIMEOUT_SECONDS=60
@@ -35,6 +25,16 @@ INSECURE=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    -host:*) SERVER=${1#*:} ;;
+    -user:*) USERNAME=${1#*:} ;;
+    -password:*) PASSWORD_SPEC=${1#*:} ;;
+    -startid:*) TASK_ID=${1#*:} ;;
+    -waitsecs:*) TIMEOUT_SECONDS=${1#*:} ;;
+    -tf:*) TASK_FILE=${1#*:} ;;
+    -sf:*) STEPS_FILE=${1#*:} ;;
+    -rf:*) RESPONSE_FILE=${1#*:} ;;
+    -df:*) DEBUG_FILE=${1#*:} ;;
+    -D:*) DEBUG_LEVEL=${1#*:} ;;
     --timeout-seconds=*) TIMEOUT_SECONDS=${1#*=} ;;
     --poll-seconds=*) POLL_SECONDS=${1#*=} ;;
     --connect-timeout-seconds=*) CONNECT_TIMEOUT_SECONDS=${1#*=} ;;
@@ -50,6 +50,26 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+for _required_pair in \
+  "host:$SERVER" \
+  "user:$USERNAME" \
+  "password:$PASSWORD_SPEC" \
+  "startid:$TASK_ID" \
+  "waitsecs:$TIMEOUT_SECONDS" \
+  "tf:$TASK_FILE" \
+  "sf:$STEPS_FILE" \
+  "rf:$RESPONSE_FILE"; do
+  _required_name=${_required_pair%%:*}
+  _required_value=${_required_pair#*:}
+  [ -n "$_required_value" ] || {
+    emit_failure "$EXIT_INVALID_ARGUMENTS" "Missing required argument: -${_required_name}:<value>"
+    usage >&2
+    exit "$EXIT_INVALID_ARGUMENTS"
+  }
+done
+
+DAT_REP_LOGFILE=$RESPONSE_FILE
+
 for _positive_value in "$TIMEOUT_SECONDS" "$POLL_SECONDS" \
   "$CONNECT_TIMEOUT_SECONDS" "$READ_TIMEOUT_SECONDS"; do
   is_positive_integer "$_positive_value" || {
@@ -57,6 +77,11 @@ for _positive_value in "$TIMEOUT_SECONDS" "$POLL_SECONDS" \
     exit "$EXIT_INVALID_ARGUMENTS"
   }
 done
+
+is_nonnegative_integer "$DEBUG_LEVEL" || {
+  emit_failure "$EXIT_INVALID_ARGUMENTS" "Debug level (-D) must be a non-negative integer"
+  exit "$EXIT_INVALID_ARGUMENTS"
+}
 
 case "$TASK_ID" in
   ''|*[!0-9]*)
@@ -89,22 +114,37 @@ case "$PASSWORD_SPEC" in
   *) PASSWORD=$PASSWORD_SPEC ;;
 esac
 
-_log_directory=$(dirname "$LOG_FILE")
-mkdir -p "$_log_directory" || {
-  emit_failure "$EXIT_INTERNAL_ERROR" "Unable to create log directory: $_log_directory"
+prepare_output_file "$RESPONSE_FILE" response || {
+  emit_failure "$EXIT_INTERNAL_ERROR" "Unable to create response file: $RESPONSE_FILE"
   exit "$EXIT_INTERNAL_ERROR"
 }
-: >> "$LOG_FILE" || {
-  emit_failure "$EXIT_INTERNAL_ERROR" "Unable to open log file: $LOG_FILE"
+prepare_output_file "$TASK_FILE" task || {
+  emit_failure "$EXIT_INTERNAL_ERROR" "Unable to create task result file: $TASK_FILE"
   exit "$EXIT_INTERNAL_ERROR"
 }
-LOG_READY=1
+prepare_output_file "$STEPS_FILE" steps || {
+  emit_failure "$EXIT_INTERNAL_ERROR" "Unable to create steps result file: $STEPS_FILE"
+  exit "$EXIT_INTERNAL_ERROR"
+}
+
+case "$DEBUG_FILE" in
+  none|NONE) DEBUG_FILE=none ;;
+  *)
+    prepare_output_file "$DEBUG_FILE" debug || {
+      emit_failure "$EXIT_INTERNAL_ERROR" "Unable to create debug file: $DEBUG_FILE"
+      exit "$EXIT_INTERNAL_ERROR"
+    }
+    LOG_READY=1
+    ;;
+esac
 
 command -v curl >/dev/null 2>&1 || fatal "$EXIT_INTERNAL_ERROR" \
   "curl is required but was not found"
+command -v egrep >/dev/null 2>&1 || fatal "$EXIT_INTERNAL_ERROR" \
+  "egrep is required but was not found"
 
 log_line INFO "========== MOVEit shell task run started =========="
-log_line INFO "server=$BASE_URL, taskId=$TASK_ID, timeoutSeconds=$TIMEOUT_SECONDS"
+log_line INFO "server=$BASE_URL, taskId=$TASK_ID, waitSeconds=$TIMEOUT_SECONDS, debugLevel=$DEBUG_LEVEL"
 if [ "$INSECURE" -eq 1 ]; then
   log_line WARN "TLS certificate and hostname verification are disabled"
 fi

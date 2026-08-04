@@ -14,9 +14,9 @@ MOVEit 认证、任务检查、任务启动、结果轮询、日志和 JSON 输�
 ## 运行要求
 
 - Java 8 或以上版本
-- POSIX Shell，默认 `/bin/sh`
+- POSIX Shell，默认 `/bin/sh`；兼容 Solaris 11.4
 - `curl`
-- 常见系统工具：`awk`、`cat`、`cut`、`date`、`dirname`、`mkdir`、`printenv`、`rm`、`sleep`、`tr`
+- 常见系统工具：`awk`、`cat`、`cut`、`date`、`dirname`、`egrep`、`mkdir`、`printenv`、`rm`、`sleep`、`tr`
 
 程序不需要 Jackson、JUnit、`jq` 或任何其他第三方 JAR；构建和测试也不需要第三方 Java 库。
 
@@ -45,34 +45,81 @@ java -cp target/test-classes:target/classes \
 ## 调用
 
 ```sh
-export MOVEIT_PASSWORD='your-password'
+export JAVA=/path/to/java
+export JAVA_TOOLS=/path/to/java/tools
+export MI_JAR=/path/to/moveit-task-runner-shell.jar
+export HOST=10.10.10.20
+export ID=api-user
+export PW='your-password'
+export TASKID=12345
+export WAITTIME=3600
+export TASK_LOGFILE=/var/log/moveit/task.xml
+export STEPS_LOGFILE=/var/log/moveit/steps.xml
+export DAT_REP_LOGFILE=/var/log/moveit/response.txt
 
-java -jar moveit-task-runner-shell.jar \
-  https://10.10.10.20 \
-  api-user \
-  env:MOVEIT_PASSWORD \
-  12345 \
-  /var/log/moveit/task-12345.log
+"${JAVA}/bin/java" \
+  -classpath "${JAVA_TOOLS}" \
+  -jar "${MI_JAR}" \
+  "-host:${HOST}" \
+  "-user:${ID}" \
+  "-password:${PW}" \
+  "-startid:${TASKID}" \
+  "-waitsecs:${WAITTIME}" \
+  "-tf:${TASK_LOGFILE}" \
+  "-sf:${STEPS_LOGFILE}" \
+  "-rf:${DAT_REP_LOGFILE}" \
+  -df:none \
+  -D:60
 
-rc=$?
-if [ "$rc" -eq 0 ]; then
+java_rc=$?
+success=`egrep -e 'ErrorCode: 0' "${DAT_REP_LOGFILE}"`
+
+if [ -n "$success" ]; then
   echo "MOVEit transfer succeeded"
 else
-  echo "MOVEit transfer failed, rc=$rc"
+  echo "MOVEit transfer failed, rc=$java_rc"
 fi
 ```
 
-也可以直接传密码，但密码可能出现在 Shell 历史或进程列表中：
+程序内部也执行同样的反引号检查：先写入 `-rf` 响应文件，再查找 `ErrorCode: 0`。只有找到该标记，Java 进程才返回退出码 `0`。
+
+Shell 赋值语句的 `=` 两边不能有空格，双引号必须成对出现。通常不应在 `${DAT_REP_LOGFILE}` 后添加 `*`，否则可能同时匹配旧响应文件并造成误判。
+
+Solaris 11.4 兼容处理：脚本不使用非 POSIX 的 `date +%s`，也不向 `dirname` 或 `cd` 传入 GNU 风格的 `--` 参数。等待超时通过 POSIX Shell 整数计数实现。
+
+`-classpath` 是 Java 启动器参数；使用 `-jar` 时，本程序不依赖该 classpath，但可以保留以兼容现有调度脚本。
+
+为了避免密码出现在 Shell 历史或进程列表中，推荐使用环境变量引用：
 
 ```sh
+export MOVEIT_PASSWORD='your-password'
+
 java -jar moveit-task-runner-shell.jar \
-  https://10.10.10.20 api-user 'your-password' 12345 ./moveit.log
+  -host:10.10.10.20 \
+  -user:api-user \
+  -password:env:MOVEIT_PASSWORD \
+  -startid:12345 \
+  -waitsecs:3600 \
+  -tf:./task.xml \
+  -sf:./steps.xml \
+  -rf:./response.txt \
+  -df:./debug.log \
+  -D:60
 ```
 
-## 可选参数
+## 参数
 
 ```text
---timeout-seconds=3600         等待任务最终结果的总时间
+-host:<server>                 MOVEit Automation Web Admin 地址或 IP
+-user:<username>               API 用户名
+-password:<value|env:VAR>      密码或密码环境变量引用
+-startid:<taskId>              要启动的任务 ID
+-waitsecs:<seconds>            等待任务完成的总秒数
+-tf:<task.xml>                 任务总体结果 XML 文件
+-sf:<steps.xml>                任务步骤/文件活动明细 XML 文件
+-rf:<response.txt>             调用响应文件
+-df:<debug.log|none>           调试日志文件；none 表示不生成
+-D:<level>                     调试级别；0 仅错误，40 基本过程，60 较详细
 --poll-seconds=5               查询任务结果的间隔
 --connect-timeout-seconds=30   curl 建立连接的超时时间
 --read-timeout-seconds=60      单次 curl 请求的最长时间
@@ -80,13 +127,17 @@ java -jar moveit-task-runner-shell.jar \
 --insecure                     关闭 TLS 证书及主机名验证，仅用于受控测试环境
 ```
 
-可选参数放在五个必填参数之后：
+前八个参数（从 `-host` 到 `-rf`）必填，顺序不限。其余参数可选。
 
-```sh
-java -jar moveit-task-runner-shell.jar \
-  https://10.10.10.20 api-user env:MOVEIT_PASSWORD 12345 ./moveit.log \
-  --timeout-seconds=1800 \
-  --poll-seconds=10
+`-rf` 使用兼容 MOVEit 命令行客户端的文本格式：
+
+```text
+ErrorCode: 0
+ErrorDescription:
+TaskID: 12345
+TaskName: Daily Transfer
+NominalStart: 2026-08-04 10:11:12.34
+TimeEnded: 2026-08-04 10:11:14
 ```
 
 如需指定其他 Shell，可设置：

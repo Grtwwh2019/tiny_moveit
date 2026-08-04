@@ -11,13 +11,22 @@ EXIT_COMMUNICATION_ERROR=8
 EXIT_INTERNAL_ERROR=9
 
 LOG_READY=0
+RESPONSE_FILE=
+DAT_REP_LOGFILE=
+TASK_FILE=
+STEPS_FILE=
+DEBUG_FILE=none
+DEBUG_LEVEL=0
+TASK_NAME=
+NOMINAL_START=
+RESULT_END_TIME=
 HTTP_SEQUENCE=0
 HTTP_BODY=
 HTTP_CODE=
 HTTP_CURL_ERROR=
 
 usage() {
-  printf '%s\n' "Usage: java -jar moveit-task-runner-shell.jar <server> <username> <password|env:VAR> <taskId> <logFile> [--timeout-seconds=3600] [--poll-seconds=5] [--connect-timeout-seconds=30] [--read-timeout-seconds=60] [--server-host=automation-host] [--insecure]"
+  printf '%s\n' "Usage: java -jar moveit-task-runner-shell.jar -host:<server> -user:<username> -password:<password|env:VAR> -startid:<taskId> -waitsecs:<seconds> -tf:<task.xml> -sf:<steps.xml> -rf:<response.txt> [-df:<debug.log|none>] [-D:<level>] [--poll-seconds=<seconds>] [--connect-timeout-seconds=<seconds>] [--read-timeout-seconds=<seconds>] [--server-host=<automation-host>] [--insecure]"
 }
 
 one_line() {
@@ -103,14 +112,49 @@ json_get_number() {
   '
 }
 
+prepare_output_file() {
+  _prepare_path=$1
+  _prepare_label=$2
+  _prepare_directory=$(dirname "$_prepare_path")
+  mkdir -p "$_prepare_directory" || return 1
+  : > "$_prepare_path" || return 1
+  return 0
+}
+
+write_response_file() {
+  [ -n "${RESPONSE_FILE:-}" ] || return 0
+  _response_code=$1
+  _response_description=$(one_line "$2")
+  _response_task_name=$(one_line "${TASK_NAME:-}")
+  _response_nominal=$(one_line "${NOMINAL_START:-}")
+  _response_end=$(one_line "${RESULT_END_TIME:-}")
+  {
+    printf 'ErrorCode: %s\n' "$_response_code"
+    printf 'ErrorDescription: %s\n' "$_response_description"
+    printf 'TaskID: %s\n' "${TASK_ID:-}"
+    printf 'TaskName: %s\n' "$_response_task_name"
+    printf 'NominalStart: %s\n' "$_response_nominal"
+    printf 'TimeEnded: %s\n' "$_response_end"
+  } > "$RESPONSE_FILE"
+}
+
+response_indicates_success() {
+  success=`egrep -e 'ErrorCode: 0' "$DAT_REP_LOGFILE"`
+  [ -n "$success" ]
+}
+
 emit_failure() {
   _emit_failure_code=$1
-  _emit_failure_message=$(json_escape "$2")
+  _emit_failure_plain=$2
+  write_response_file "$_emit_failure_code" "$_emit_failure_plain" || :
+  _emit_failure_message=$(json_escape "$_emit_failure_plain")
   printf '{"result":"FAILURE","exitCode":%s,"message":"%s"}\n' \
     "$_emit_failure_code" "$_emit_failure_message"
 }
 
 emit_success() {
+  write_response_file 0 "" || return 1
+  response_indicates_success || return 1
   _emit_success_message=$(json_escape "File transfer succeeded")
   _emit_success_status=$(json_escape "$RESULT_STATUS")
   _emit_success_run_id=$(json_escape "$RESULT_RUN_ID")
@@ -119,14 +163,23 @@ emit_success() {
     "$TASK_ID" "$_emit_success_run_id" "$_emit_success_nominal" \
     "$_emit_success_status" "$RESULT_STATUS_CODE" "$RESULT_FILES_SENT" \
     "$RESULT_TOTAL_BYTES_SENT" "$_emit_success_message"
+  return 0
 }
 
 log_line() {
   [ "$LOG_READY" -eq 1 ] || return 0
   _log_level=$1
+  case "$_log_level" in
+    ERROR) _log_required_level=0 ;;
+    WARN) _log_required_level=20 ;;
+    INFO) _log_required_level=40 ;;
+    DEBUG) _log_required_level=60 ;;
+    *) _log_required_level=60 ;;
+  esac
+  [ "$DEBUG_LEVEL" -ge "$_log_required_level" ] || return 0
   _log_message=$(one_line "$2")
   _log_timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-  printf '%s [%s] %s\n' "$_log_timestamp" "$_log_level" "$_log_message" >> "$LOG_FILE"
+  printf '%s [%s] %s\n' "$_log_timestamp" "$_log_level" "$_log_message" >> "$DEBUG_FILE"
 }
 
 fatal() {
@@ -145,8 +198,16 @@ is_positive_integer() {
   esac
 }
 
+is_nonnegative_integer() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 http_execute() {
   HTTP_SEQUENCE=$((HTTP_SEQUENCE + 1))
+  log_line DEBUG "HTTP request sequence=$HTTP_SEQUENCE" || :
   _http_body_file="$MOVEIT_SHELL_HOME/http-body.$$.${HTTP_SEQUENCE}"
   _http_error_file="$MOVEIT_SHELL_HOME/http-error.$$.${HTTP_SEQUENCE}"
 
@@ -174,6 +235,8 @@ http_execute() {
     HTTP_CURL_ERROR=
   fi
   rm -f "$_http_body_file" "$_http_error_file"
+
+  log_line DEBUG "HTTP response sequence=$HTTP_SEQUENCE, status=${HTTP_CODE:-none}, curlExit=$_http_curl_rc" || :
 
   [ "$_http_curl_rc" -eq 0 ] || return 1
   case "$HTTP_CODE" in

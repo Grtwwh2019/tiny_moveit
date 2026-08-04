@@ -17,7 +17,8 @@ verify_moveit_task() {
   http_is_success || fatal "$EXIT_COMMUNICATION_ERROR" \
     "Task lookup failed, HTTP=$HTTP_CODE, response=$(abbreviate_response "$HTTP_BODY")"
 
-  log_line INFO "Task verified, taskId=$TASK_ID"
+  TASK_NAME=$(json_get_string "$HTTP_BODY" Name)
+  log_line INFO "Task verified, taskId=$TASK_ID, taskName=${TASK_NAME:-unknown}"
 }
 
 start_moveit_task() {

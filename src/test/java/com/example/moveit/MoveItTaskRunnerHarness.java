@@ -23,6 +23,8 @@ public final class MoveItTaskRunnerHarness {
     private final AtomicReference<String> tokenRequestBody = new AtomicReference<String>();
     private final AtomicReference<String> reportRequestBody = new AtomicReference<String>();
     private final AtomicReference<String> reportAuthorization = new AtomicReference<String>();
+    private final AtomicReference<String> taskExportRequestBody = new AtomicReference<String>();
+    private final AtomicReference<String> stepsExportRequestBody = new AtomicReference<String>();
 
     public static void main(String[] args) throws Exception {
         runTest(new TestCase() {
@@ -71,12 +73,13 @@ public final class MoveItTaskRunnerHarness {
                 }
                 return "{\"items\":[{\"RunID\":42,\"Status\":\"Success\","
                         + "\"StatusCode\":0,\"FilesSent\":3,\"TotalBytesSent\":1234,"
-                        + "\"StatusMsg\":\"Completed\"}]}";
+                        + "\"StatusMsg\":\"Completed\","
+                        + "\"EndTime\":\"2026-08-04 10:11:14\"}]}";
             }
         });
-        Path log = Files.createTempFile("moveit-shell-success", ".log");
+        OutputFiles files = outputFiles("moveit-shell-success");
 
-        int exitCode = MoveItTaskRunner.run(arguments(log, "secret"),
+        int exitCode = MoveItTaskRunner.run(arguments(files, "secret", files.debug.toString()),
                 Collections.<String, String>emptyMap(), false);
 
         assertEquals(0, exitCode, "success exit code");
@@ -89,7 +92,19 @@ public final class MoveItTaskRunnerHarness {
                 "Status=in=(\\\"Success\\\",\\\"Failure\\\")",
                 "report status predicate");
         assertEquals("Bearer test-token", reportAuthorization.get(), "authorization header");
-        String content = readFile(log);
+        assertContains(taskExportRequestBody.get(), "\"type\":\"TaskRuns\"",
+                "task XML export type");
+        assertContains(stepsExportRequestBody.get(), "\"type\":\"Activity\"",
+                "steps XML export type");
+        assertContains(readFile(files.response), "ErrorCode: 0", "response success code");
+        assertContains(readFile(files.response), "TaskName: Daily Transfer", "response task name");
+        assertContains(readFile(files.response), "TimeEnded: 2026-08-04 10:11:14",
+                "response end time");
+        assertContains(readFile(files.task), "<TaskName>Daily Transfer</TaskName>",
+                "task XML output");
+        assertContains(readFile(files.steps), "<Action>send</Action>",
+                "steps XML output");
+        String content = readFile(files.debug);
         assertContains(content, "status=Success", "success log status");
         assertContains(content, "filesSent=3", "success log file count");
         assertContains(content, "Program exit code=0", "success log exit code");
@@ -101,16 +116,27 @@ public final class MoveItTaskRunnerHarness {
             String response() {
                 return "{\"items\":[{\"RunID\":99,\"Status\":\"Failure\","
                         + "\"StatusCode\":17,\"FilesSent\":0,\"TotalBytesSent\":0,"
-                        + "\"StatusMsg\":\"Destination unavailable\"}]}";
+                        + "\"StatusMsg\":\"Destination unavailable\","
+                        + "\"EndTime\":\"2026-08-04 10:11:15\"}]}";
+            }
+
+            @Override
+            String taskStatus() {
+                return "Failure";
             }
         });
-        Path log = Files.createTempFile("moveit-shell-failure", ".log");
+        OutputFiles files = outputFiles("moveit-shell-failure");
 
-        int exitCode = MoveItTaskRunner.run(arguments(log, "secret"),
+        int exitCode = MoveItTaskRunner.run(arguments(files, "secret", files.debug.toString()),
                 Collections.<String, String>emptyMap(), false);
 
         assertEquals(6, exitCode, "failure exit code");
-        String content = readFile(log);
+        assertContains(readFile(files.response), "ErrorCode: 6", "response failure code");
+        assertContains(readFile(files.response), "Destination unavailable",
+                "response failure description");
+        assertContains(readFile(files.task), "<Success>Failure</Success>",
+                "failure task XML output");
+        String content = readFile(files.debug);
         assertContains(content, "Destination unavailable", "failure log message");
         assertContains(content, "Program exit code=6", "failure log exit code");
     }
@@ -120,26 +146,45 @@ public final class MoveItTaskRunnerHarness {
             @Override
             String response() {
                 return "{\"items\":[{\"RunID\":7,\"Status\":\"Success\","
-                        + "\"StatusCode\":0,\"FilesSent\":1,\"TotalBytesSent\":10}]}";
+                        + "\"StatusCode\":0,\"FilesSent\":1,\"TotalBytesSent\":10,"
+                        + "\"EndTime\":\"2026-08-04 10:11:16\"}]}";
             }
         });
-        Path log = Files.createTempFile("moveit-shell-env", ".log");
+        OutputFiles files = outputFiles("moveit-shell-env");
         Map<String, String> environment =
                 Collections.singletonMap("MOVEIT_TEST_PASSWORD", "secret value");
 
         int exitCode = MoveItTaskRunner.run(
-                arguments(log, "env:MOVEIT_TEST_PASSWORD"), environment, false);
+                arguments(files, "env:MOVEIT_TEST_PASSWORD", "none"), environment, false);
 
         assertEquals(0, exitCode, "environment password exit code");
         assertContains(tokenRequestBody.get(), "password=secret+value",
                 "URL-encoded environment password");
+        assertEquals(false, Files.exists(files.debug), "-df:none does not create debug file");
     }
 
-    private String[] arguments(Path log, String password) {
+    private OutputFiles outputFiles(String prefix) throws IOException {
+        Path directory = Files.createTempDirectory(prefix);
+        return new OutputFiles(
+                directory.resolve("task.xml"),
+                directory.resolve("steps.xml"),
+                directory.resolve("response.txt"),
+                directory.resolve("debug.log"));
+    }
+
+    private String[] arguments(OutputFiles files, String password, String debugFile) {
         return new String[]{
-                "http://127.0.0.1:" + server.getAddress().getPort(),
-                "api-user", password, "123", log.toString(),
-                "--poll-seconds=1", "--timeout-seconds=10"
+                "-host:http://127.0.0.1:" + server.getAddress().getPort(),
+                "-user:api-user",
+                "-password:" + password,
+                "-startid:123",
+                "-waitsecs:10",
+                "-tf:" + files.task,
+                "-sf:" + files.steps,
+                "-rf:" + files.response,
+                "-df:" + debugFile,
+                "-D:60",
+                "--poll-seconds=1"
         };
     }
 
@@ -163,6 +208,24 @@ public final class MoveItTaskRunnerHarness {
                 reportRequestBody.set(read(exchange.getRequestBody()));
                 reportAuthorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
                 respond(exchange, 200, scenario.response());
+            }
+        });
+        server.createContext("/api/v1/reports/export", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                String request = read(exchange.getRequestBody());
+                if (request.contains("\"type\":\"TaskRuns\"")) {
+                    taskExportRequestBody.set(request);
+                    respond(exchange, 200, "<Records><Record><TaskID>123</TaskID>"
+                            + "<TaskName>Daily Transfer</TaskName><Success>"
+                            + scenario.taskStatus() + "</Success></Record></Records>");
+                } else if (request.contains("\"type\":\"Activity\"")) {
+                    stepsExportRequestBody.set(request);
+                    respond(exchange, 200, "<Records><Record><TaskID>123</TaskID>"
+                            + "<Action>send</Action><ErrCode>0</ErrCode></Record></Records>");
+                } else {
+                    respond(exchange, 400, "{\"error\":\"unsupported report type\"}");
+                }
             }
         });
         server.start();
@@ -220,5 +283,23 @@ public final class MoveItTaskRunnerHarness {
 
     private abstract static class ReportScenario {
         abstract String response();
+
+        String taskStatus() {
+            return "Success";
+        }
+    }
+
+    private static final class OutputFiles {
+        final Path task;
+        final Path steps;
+        final Path response;
+        final Path debug;
+
+        OutputFiles(Path task, Path steps, Path response, Path debug) {
+            this.task = task;
+            this.steps = steps;
+            this.response = response;
+            this.debug = debug;
+        }
     }
 }
