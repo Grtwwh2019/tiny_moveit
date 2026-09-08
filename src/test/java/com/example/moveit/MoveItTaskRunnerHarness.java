@@ -12,10 +12,12 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Dependency-free integration test harness; run its main method after test-compile. */
@@ -54,7 +56,31 @@ public final class MoveItTaskRunnerHarness {
                 harness.expiredAccessTokenIsRenewedAndRequestRetried();
             }
         });
-        System.out.println("Integration tests passed: 4/4");
+        runTest(new TestCase() {
+            @Override
+            public void run(MoveItTaskRunnerHarness harness) throws Exception {
+                harness.progressivePollingReadsEnvironmentConfiguration();
+            }
+        });
+        runTest(new TestCase() {
+            @Override
+            public void run(MoveItTaskRunnerHarness harness) throws Exception {
+                harness.progressiveCommandLineOptionsOverrideEnvironment();
+            }
+        });
+        runTest(new TestCase() {
+            @Override
+            public void run(MoveItTaskRunnerHarness harness) throws Exception {
+                harness.fixedAndProgressiveCommandLineOptionsConflict();
+            }
+        });
+        runTest(new TestCase() {
+            @Override
+            public void run(MoveItTaskRunnerHarness harness) throws Exception {
+                harness.progressiveMaximumCannotBeLessThanInitialInterval();
+            }
+        });
+        System.out.println("Integration tests passed: 8/8");
     }
 
     private static void runTest(TestCase testCase) throws Exception {
@@ -200,6 +226,112 @@ public final class MoveItTaskRunnerHarness {
                 "token renewal log message");
     }
 
+    private void progressivePollingReadsEnvironmentConfiguration() throws Exception {
+        final AtomicInteger reportCalls = new AtomicInteger();
+        startServer(new ReportScenario() {
+            @Override
+            String response() {
+                if (reportCalls.incrementAndGet() < 3) {
+                    return "{\"items\":[]}";
+                }
+                return "{\"items\":[{\"RunID\":10,\"TaskName\":\"Daily Transfer\","
+                        + "\"Status\":\"Success\",\"StatusCode\":0,\"FilesSent\":1,"
+                        + "\"TotalBytesSent\":10,\"EndTime\":\"2026-08-04 10:11:18\"}]}";
+            }
+        });
+        OutputFiles files = outputFiles("moveit-shell-progressive-env");
+        Map<String, String> environment = new HashMap<String, String>();
+        environment.put("MOVEIT_POLL_INITIAL_SECONDS", "1");
+        environment.put("MOVEIT_POLL_INCREMENT_SECONDS", "1");
+        environment.put("MOVEIT_POLL_MAX_SECONDS", "2");
+
+        int exitCode = MoveItTaskRunner.run(
+                progressiveArguments(files, "secret", files.debug.toString()),
+                environment, false);
+
+        assertEquals(0, exitCode, "progressive environment exit code");
+        assertEquals(3, reportCalls.get(), "progressive environment report poll count");
+        String content = readFile(files.debug);
+        assertContains(content,
+                "Polling configuration: mode=progressive, initial=1s, increment=1s, max=2s",
+                "progressive environment configuration");
+        assertContains(content, "next check in 1s", "first progressive interval");
+        assertContains(content, "next check in 2s", "incremented progressive interval");
+    }
+
+    private void progressiveCommandLineOptionsOverrideEnvironment() throws Exception {
+        startServer(new ReportScenario() {
+            @Override
+            String response() {
+                return "{\"items\":[{\"RunID\":11,\"TaskName\":\"Daily Transfer\","
+                        + "\"Status\":\"Success\",\"StatusCode\":0,\"FilesSent\":1,"
+                        + "\"TotalBytesSent\":10,\"EndTime\":\"2026-08-04 10:11:19\"}]}";
+            }
+        });
+        OutputFiles files = outputFiles("moveit-shell-progressive-cli");
+        Map<String, String> environment = new HashMap<String, String>();
+        environment.put("MOVEIT_POLL_INITIAL_SECONDS", "30");
+        environment.put("MOVEIT_POLL_INCREMENT_SECONDS", "10");
+        environment.put("MOVEIT_POLL_MAX_SECONDS", "60");
+        String[] args = appendArguments(
+                progressiveArguments(files, "secret", files.debug.toString()),
+                "--poll-initial-seconds=1",
+                "--poll-increment-seconds=1",
+                "--poll-max-seconds=2");
+
+        int exitCode = MoveItTaskRunner.run(args, environment, false);
+
+        assertEquals(0, exitCode, "progressive command line exit code");
+        assertContains(readFile(files.debug),
+                "Polling configuration: mode=progressive, initial=1s, increment=1s, max=2s",
+                "command line polling precedence");
+    }
+
+    private void fixedAndProgressiveCommandLineOptionsConflict() throws Exception {
+        startServer(new ReportScenario() {
+            @Override
+            String response() {
+                return "{\"items\":[]}";
+            }
+        });
+        OutputFiles files = outputFiles("moveit-shell-poll-conflict");
+        String[] args = appendArguments(arguments(files, "secret", files.debug.toString()),
+                "--poll-initial-seconds=1");
+
+        int exitCode = MoveItTaskRunner.run(args,
+                Collections.<String, String>emptyMap(), false);
+
+        assertEquals(2, exitCode, "polling option conflict exit code");
+        assertEquals(0, tokenCalls.get(), "polling conflict stops before authentication");
+        assertContains(readFile(files.response),
+                "--poll-seconds cannot be combined with progressive polling options",
+                "polling option conflict response");
+    }
+
+    private void progressiveMaximumCannotBeLessThanInitialInterval() throws Exception {
+        startServer(new ReportScenario() {
+            @Override
+            String response() {
+                return "{\"items\":[]}";
+            }
+        });
+        OutputFiles files = outputFiles("moveit-shell-poll-invalid-range");
+        Map<String, String> environment = new HashMap<String, String>();
+        environment.put("MOVEIT_POLL_INITIAL_SECONDS", "2");
+        environment.put("MOVEIT_POLL_INCREMENT_SECONDS", "1");
+        environment.put("MOVEIT_POLL_MAX_SECONDS", "1");
+
+        int exitCode = MoveItTaskRunner.run(
+                progressiveArguments(files, "secret", files.debug.toString()),
+                environment, false);
+
+        assertEquals(2, exitCode, "progressive polling range exit code");
+        assertEquals(0, tokenCalls.get(), "invalid polling range stops before authentication");
+        assertContains(readFile(files.response),
+                "Progressive polling maximum must be greater than or equal to the initial interval",
+                "invalid polling range response");
+    }
+
     private OutputFiles outputFiles(String prefix) throws IOException {
         Path directory = Files.createTempDirectory(prefix);
         return new OutputFiles(
@@ -223,6 +355,17 @@ public final class MoveItTaskRunnerHarness {
                 "-D:60",
                 "--poll-seconds=1"
         };
+    }
+
+    private String[] progressiveArguments(OutputFiles files, String password, String debugFile) {
+        String[] fixedArguments = arguments(files, password, debugFile);
+        return Arrays.copyOf(fixedArguments, fixedArguments.length - 1);
+    }
+
+    private static String[] appendArguments(String[] original, String... additions) {
+        String[] combined = Arrays.copyOf(original, original.length + additions.length);
+        System.arraycopy(additions, 0, combined, original.length, additions.length);
+        return combined;
     }
 
     private void startServer(final ReportScenario scenario) throws IOException {

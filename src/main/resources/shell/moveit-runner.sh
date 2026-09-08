@@ -17,7 +17,12 @@ USERNAME=
 PASSWORD_SPEC=
 TASK_ID=
 TIMEOUT_SECONDS=
-POLL_SECONDS=5
+POLL_SECONDS=
+POLL_INITIAL_SECONDS=${MOVEIT_POLL_INITIAL_SECONDS:-15}
+POLL_INCREMENT_SECONDS=${MOVEIT_POLL_INCREMENT_SECONDS:-5}
+POLL_MAX_SECONDS=${MOVEIT_POLL_MAX_SECONDS:-60}
+POLL_FIXED_OPTION_SET=0
+POLL_PROGRESSIVE_OPTION_SET=0
 CONNECT_TIMEOUT_SECONDS=30
 READ_TIMEOUT_SECONDS=60
 SERVER_HOST=
@@ -38,7 +43,22 @@ while [ "$#" -gt 0 ]; do
     -df:*) DEBUG_FILE=${1#*:} ;;
     -D:*) DEBUG_LEVEL=${1#*:} ;;
     --timeout-seconds=*) TIMEOUT_SECONDS=${1#*=} ;;
-    --poll-seconds=*) POLL_SECONDS=${1#*=} ;;
+    --poll-seconds=*)
+      POLL_SECONDS=${1#*=}
+      POLL_FIXED_OPTION_SET=1
+      ;;
+    --poll-initial-seconds=*)
+      POLL_INITIAL_SECONDS=${1#*=}
+      POLL_PROGRESSIVE_OPTION_SET=1
+      ;;
+    --poll-increment-seconds=*)
+      POLL_INCREMENT_SECONDS=${1#*=}
+      POLL_PROGRESSIVE_OPTION_SET=1
+      ;;
+    --poll-max-seconds=*)
+      POLL_MAX_SECONDS=${1#*=}
+      POLL_PROGRESSIVE_OPTION_SET=1
+      ;;
     --connect-timeout-seconds=*) CONNECT_TIMEOUT_SECONDS=${1#*=} ;;
     --read-timeout-seconds=*) READ_TIMEOUT_SECONDS=${1#*=} ;;
     --server-host=*) SERVER_HOST=${1#*=} ;;
@@ -73,10 +93,38 @@ done
 
 DAT_REP_LOGFILE=$RESPONSE_FILE
 
-for _positive_value in "$TIMEOUT_SECONDS" "$POLL_SECONDS" \
+if [ "$POLL_FIXED_OPTION_SET" -eq 1 ] && [ "$POLL_PROGRESSIVE_OPTION_SET" -eq 1 ]; then
+  emit_failure "$EXIT_INVALID_ARGUMENTS" \
+    "--poll-seconds cannot be combined with progressive polling options"
+  exit "$EXIT_INVALID_ARGUMENTS"
+fi
+
+if [ "$POLL_FIXED_OPTION_SET" -eq 1 ]; then
+  POLL_MODE=fixed
+  is_positive_integer "$POLL_SECONDS" || {
+    emit_failure "$EXIT_INVALID_ARGUMENTS" "--poll-seconds must be a positive integer"
+    exit "$EXIT_INVALID_ARGUMENTS"
+  }
+else
+  POLL_MODE=progressive
+  for _poll_value in "$POLL_INITIAL_SECONDS" "$POLL_INCREMENT_SECONDS" "$POLL_MAX_SECONDS"; do
+    is_positive_integer "$_poll_value" || {
+      emit_failure "$EXIT_INVALID_ARGUMENTS" \
+        "Progressive polling options and environment variables must be positive integers"
+      exit "$EXIT_INVALID_ARGUMENTS"
+    }
+  done
+  [ "$POLL_MAX_SECONDS" -ge "$POLL_INITIAL_SECONDS" ] || {
+    emit_failure "$EXIT_INVALID_ARGUMENTS" \
+      "Progressive polling maximum must be greater than or equal to the initial interval"
+    exit "$EXIT_INVALID_ARGUMENTS"
+  }
+fi
+
+for _positive_value in "$TIMEOUT_SECONDS" \
   "$CONNECT_TIMEOUT_SECONDS" "$READ_TIMEOUT_SECONDS"; do
   is_positive_integer "$_positive_value" || {
-    emit_failure "$EXIT_INVALID_ARGUMENTS" "Timeout and polling options must be positive integers"
+    emit_failure "$EXIT_INVALID_ARGUMENTS" "Timeout options must be positive integers"
     exit "$EXIT_INVALID_ARGUMENTS"
   }
 done
@@ -148,6 +196,11 @@ command -v egrep >/dev/null 2>&1 || fatal "$EXIT_INTERNAL_ERROR" \
 
 log_line INFO "========== MOVEit shell task run started =========="
 log_line INFO "server=$BASE_URL, taskId=$TASK_ID, waitSeconds=$TIMEOUT_SECONDS, debugLevel=$DEBUG_LEVEL"
+if [ "$POLL_MODE" = "fixed" ]; then
+  log_line INFO "Polling configuration: mode=fixed, interval=${POLL_SECONDS}s"
+else
+  log_line INFO "Polling configuration: mode=progressive, initial=${POLL_INITIAL_SECONDS}s, increment=${POLL_INCREMENT_SECONDS}s, max=${POLL_MAX_SECONDS}s"
+fi
 if [ "$INSECURE" -eq 1 ]; then
   log_line WARN "TLS certificate and hostname verification are disabled"
 fi

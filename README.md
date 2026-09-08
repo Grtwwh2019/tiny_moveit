@@ -2,6 +2,10 @@
 
 这是一个无第三方运行时 JAR 依赖的 MOVEit Automation 命令行程序。
 
+当前版本：**2.1.6**
+
+发布文件名固定为 `moveit-task-runner-shell.jar`。升级版本时直接替换该文件，版本号记录在本 README、`pom.xml` 和 Git 提交说明中。
+
 Java 代码只负责：
 
 1. 从 JAR 中释放内嵌 Shell 模块到临时目录。
@@ -120,7 +124,10 @@ java -jar moveit-task-runner-shell.jar \
 -rf:<response.txt>             调用响应文件
 -df:<debug.log|none>           调试日志文件；none 表示不生成
 -D:<level>                     调试级别；0 仅错误，40 基本过程，60 较详细
---poll-seconds=5               查询任务结果的间隔
+--poll-seconds=<seconds>       使用固定间隔查询任务结果
+--poll-initial-seconds=15      渐进轮询的起始间隔
+--poll-increment-seconds=5     渐进轮询每轮增加的间隔
+--poll-max-seconds=60          渐进轮询的间隔上限
 --connect-timeout-seconds=30   curl 建立连接的超时时间
 --read-timeout-seconds=60      单次 curl 请求的最长时间
 --server-host=automation-host  Web Admin 管理多个后端时指定 Automation Server
@@ -129,6 +136,30 @@ java -jar moveit-task-runner-shell.jar \
 ```
 
 前八个参数（从 `-host` 到 `-rf`）必填，顺序不限。其余参数可选。
+
+## 轮询配置
+
+默认使用渐进轮询。任务启动后立即查询一次；如果任务还没有结束，后续等待间隔依次为 15、20、25 秒，逐步增加到 60 秒，之后保持 60 秒。
+
+可以在运行 JAR 的 Solaris 服务器上通过环境变量配置：
+
+```sh
+export MOVEIT_POLL_INITIAL_SECONDS=15
+export MOVEIT_POLL_INCREMENT_SECONDS=5
+export MOVEIT_POLL_MAX_SECONDS=60
+```
+
+也可以在命令行中配置：
+
+```sh
+--poll-initial-seconds=15 \
+--poll-increment-seconds=5 \
+--poll-max-seconds=60
+```
+
+每项配置的优先级为：命令行参数、环境变量、默认值。三个值都必须是正整数，最大间隔不能小于起始间隔。
+
+显式传入 `--poll-seconds=N` 时使用固定 N 秒间隔，并忽略三个渐进轮询环境变量。`--poll-seconds` 不能与渐进轮询命令行参数同时使用；同时使用会返回参数错误码 `2`。
 
 ## TLS 证书处理
 

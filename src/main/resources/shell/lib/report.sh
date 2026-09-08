@@ -69,7 +69,12 @@ write_requested_reports() {
 
 wait_for_moveit_result() {
   _report_elapsed=0
-  log_line INFO "Polling final result, timeout=${TIMEOUT_SECONDS}s, interval=${POLL_SECONDS}s"
+  if [ "$POLL_MODE" = "fixed" ]; then
+    _report_interval=$POLL_SECONDS
+  else
+    _report_interval=$POLL_INITIAL_SECONDS
+  fi
+  log_line INFO "Polling final result, timeout=${TIMEOUT_SECONDS}s"
 
   while [ "$_report_elapsed" -lt "$TIMEOUT_SECONDS" ]; do
     query_moveit_result
@@ -94,14 +99,24 @@ wait_for_moveit_result() {
         "MOVEit task failed: ${RESULT_STATUS_MESSAGE:-$RESULT_STATUS}"
     fi
 
-    _report_sleep=$POLL_SECONDS
+    _report_sleep=$_report_interval
     _report_remaining=$((TIMEOUT_SECONDS - _report_elapsed))
     if [ "$_report_sleep" -gt "$_report_remaining" ]; then
       _report_sleep=$_report_remaining
     fi
+    log_line DEBUG "Task result is not final; next check in ${_report_sleep}s"
     sleep "$_report_sleep"
     _report_elapsed=$((_report_elapsed + _report_sleep))
     TOKEN_AGE_SECONDS=$((TOKEN_AGE_SECONDS + _report_sleep))
+
+    if [ "$POLL_MODE" = "progressive" ]; then
+      _report_next_interval=$((_report_interval + POLL_INCREMENT_SECONDS))
+      if [ "$_report_next_interval" -gt "$POLL_MAX_SECONDS" ]; then
+        _report_interval=$POLL_MAX_SECONDS
+      else
+        _report_interval=$_report_next_interval
+      fi
+    fi
   done
 
   fatal "$EXIT_TIMEOUT" \

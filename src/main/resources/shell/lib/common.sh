@@ -26,7 +26,7 @@ HTTP_CODE=
 HTTP_CURL_ERROR=
 
 usage() {
-  printf '%s\n' "Usage: java -jar moveit-task-runner-shell.jar -host:<server> -user:<username> -password:<password|env:VAR> -startid:<taskId> -waitsecs:<seconds> -tf:<task.xml> -sf:<steps.xml> -rf:<response.txt> [-df:<debug.log|none>] [-D:<level>] [--poll-seconds=<seconds>] [--connect-timeout-seconds=<seconds>] [--read-timeout-seconds=<seconds>] [--server-host=<automation-host>] [--insecure]"
+  printf '%s\n' "Usage: java -jar moveit-task-runner-shell.jar -host:<server> -user:<username> -password:<password|env:VAR> -startid:<taskId> -waitsecs:<seconds> -tf:<task.xml> -sf:<steps.xml> -rf:<response.txt> [-df:<debug.log|none>] [-D:<level>] [--poll-seconds=<seconds> | --poll-initial-seconds=<seconds> --poll-increment-seconds=<seconds> --poll-max-seconds=<seconds>] [--connect-timeout-seconds=<seconds>] [--read-timeout-seconds=<seconds>] [--server-host=<automation-host>] [--secure|--insecure]"
 }
 
 one_line() {
