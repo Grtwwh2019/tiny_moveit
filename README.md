@@ -2,16 +2,16 @@
 
 这是一个无第三方运行时 JAR 依赖的 MOVEit Automation 命令行程序。
 
-当前版本：**2.1.6**
+当前版本：**2.2.0**
 
 发布文件名固定为 `moveit-task-runner-shell.jar`。升级版本时直接替换该文件，版本号记录在本 README、`pom.xml` 和 Git 提交说明中。
 
 Java 代码只负责：
 
-1. 从 JAR 中释放内嵌 Shell 模块到临时目录。
-2. 使用 `/bin/sh` 调用主 Shell 脚本并原样传递参数。
+1. 从 JAR 中读取并在内存中解密受保护的 Shell 载荷。
+2. 通过标准输入把合并后的脚本交给 `/bin/sh`，不生成临时 `.sh` 文件。
 3. 将 Shell 的标准输出、标准错误和退出码原样返回给调用方。
-4. 删除运行期间释放的临时脚本。
+4. 删除运行期间用于 HTTP 响应的私有临时目录。
 
 MOVEit 认证、任务检查、任务启动、结果轮询、日志和 JSON 输出全部由 Shell 实现。
 
@@ -27,8 +27,10 @@ MOVEit 认证、任务检查、任务启动、结果轮询、日志和 JSON 输�
 ## 构建
 
 ```sh
-mvn clean package
+sh build-secure-jar.sh
 ```
+
+构建脚本只使用 JDK 自带的 `javac`、`java` 和 Maven：先合并 Shell 源文件并生成 AES-128-GCM 加密载荷，再执行 `mvn clean package`。修改任何 Shell 模块后必须使用该脚本重新生成载荷，不能只运行普通的 `mvn package`。
 
 生成的单文件程序：
 
@@ -198,7 +200,18 @@ shell/lib/task.sh       任务检查和任务启动
 shell/lib/report.sh     Task Runs 查询、轮询和结果判断
 ```
 
-这些文件以资源形式内嵌在 JAR 中，运行时自动释放。
+这些文件只作为构建源文件存在，不会以明文形式进入 JAR。构建时它们被合并、加密为 `META-INF/.runtime.bin`；运行时在 Java 内存中解密并通过 stdin 交给 `/bin/sh`，不会生成临时 Shell 文件。
+
+## 源码保护说明
+
+2.2.0 对运行产物增加以下保护：
+
+- JAR 中不包含明文 `.sh` 文件。
+- Shell 载荷使用带完整性校验的 AES-128-GCM 加密。
+- Java 启动器内部符号采用精简命名，增加普通反编译后的阅读成本。
+- 解密后的字节在进程结束前清零，运行目录权限在 POSIX 系统上设置为仅当前账号可访问。
+
+这些措施用于防止直接解压 JAR 或简单反编译获取业务脚本，不属于硬件级密钥保护。能够控制运行账号、替换 `MOVEIT_SHELL`、调试 JVM 或拥有 root 权限的人员，理论上仍然可以在运行时截获解密后的内容。
 
 ## 标准输出
 

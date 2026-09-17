@@ -32,6 +32,7 @@ public final class MoveItTaskRunnerHarness {
     private final AtomicBoolean rejectFirstTaskRunsToken = new AtomicBoolean();
 
     public static void main(String[] args) throws Exception {
+        encryptedPayloadReplacesPlainShellResources();
         runTest(new TestCase() {
             @Override
             public void run(MoveItTaskRunnerHarness harness) throws Exception {
@@ -42,6 +43,12 @@ public final class MoveItTaskRunnerHarness {
             @Override
             public void run(MoveItTaskRunnerHarness harness) throws Exception {
                 harness.embeddedShellReturnsSixWhenMoveItReportsFailure();
+            }
+        });
+        runTest(new TestCase() {
+            @Override
+            public void run(MoveItTaskRunnerHarness harness) throws Exception {
+                harness.completedRunWithNoFilesReturnsSixImmediately();
             }
         });
         runTest(new TestCase() {
@@ -80,7 +87,20 @@ public final class MoveItTaskRunnerHarness {
                 harness.progressiveMaximumCannotBeLessThanInitialInterval();
             }
         });
-        System.out.println("Integration tests passed: 8/8");
+        System.out.println("Integration tests passed: 10/10");
+    }
+
+    private static void encryptedPayloadReplacesPlainShellResources() throws IOException {
+        ClassLoader loader = MoveItTaskRunnerHarness.class.getClassLoader();
+        InputStream encrypted = loader.getResourceAsStream("META-INF/.runtime.bin");
+        assertEquals(true, encrypted != null, "encrypted runtime payload is packaged");
+        if (encrypted != null) {
+            encrypted.close();
+        }
+        assertEquals(null, loader.getResource("shell/moveit-runner.sh"),
+                "plain main shell is not packaged");
+        assertEquals(null, loader.getResource("shell/lib/auth.sh"),
+                "plain shell modules are not packaged");
     }
 
     private static void runTest(TestCase testCase) throws Exception {
@@ -104,7 +124,9 @@ public final class MoveItTaskRunnerHarness {
             @Override
             String response() {
                 if (reportCalls.incrementAndGet() == 1) {
-                    return "{\"items\":[]}";
+                    return "{\"items\":[{\"RunID\":42,\"TaskName\":\"Daily Transfer\","
+                            + "\"Status\":\"Running\",\"StatusCode\":0,"
+                            + "\"FilesSent\":0,\"TotalBytesSent\":0,\"EndTime\":\"\"}]}";
                 }
                 return "{\"items\":[{\"RunID\":42,\"TaskName\":\"Daily Transfer\","
                         + "\"Status\":\"Success\","
@@ -124,9 +146,8 @@ public final class MoveItTaskRunnerHarness {
         assertContains(reportRequestBody.get(),
                 "NominalStart==\\\"2026-08-04 10:11:12.34\\\"",
                 "report nominalStart predicate");
-        assertContains(reportRequestBody.get(),
-                "Status=in=(\\\"Success\\\",\\\"Failure\\\")",
-                "report status predicate");
+        assertNotContains(reportRequestBody.get(), "Status=in=",
+                "report predicate must include all terminal statuses");
         assertEquals("Bearer test-token-1", reportAuthorization.get(), "authorization header");
         assertContains(taskExportRequestBody.get(), "\"type\":\"TaskRuns\"",
                 "task XML export type");
@@ -177,6 +198,38 @@ public final class MoveItTaskRunnerHarness {
         String content = readFile(files.debug);
         assertContains(content, "Destination unavailable", "failure log message");
         assertContains(content, "Program exit code=6", "failure log exit code");
+    }
+
+    private void completedRunWithNoFilesReturnsSixImmediately() throws Exception {
+        final AtomicInteger reportCalls = new AtomicInteger();
+        startServer(new ReportScenario() {
+            @Override
+            String response() {
+                reportCalls.incrementAndGet();
+                return "{\"items\":[{\"RunID\":100,\"TaskName\":\"Daily Transfer\","
+                        + "\"Status\":\"Warning\",\"StatusCode\":2,"
+                        + "\"FilesSent\":0,\"TotalBytesSent\":0,"
+                        + "\"StatusMsg\":\"No files found\","
+                        + "\"EndTime\":\"2026-08-04 10:11:16\"}]}";
+            }
+
+            @Override
+            String taskStatus() {
+                return "Warning";
+            }
+        });
+        OutputFiles files = outputFiles("moveit-shell-no-files");
+
+        int exitCode = MoveItTaskRunner.run(arguments(files, "secret", files.debug.toString()),
+                Collections.<String, String>emptyMap(), false);
+
+        assertEquals(6, exitCode, "no-files exit code");
+        assertEquals(1, reportCalls.get(), "no-files report poll count");
+        assertContains(readFile(files.response), "ErrorCode: 6", "no-files response code");
+        assertContains(readFile(files.response), "No files found",
+                "no-files response description");
+        assertContains(readFile(files.debug), "No files found", "no-files debug message");
+        assertContains(readFile(files.debug), "Program exit code=6", "no-files log exit code");
     }
 
     private void embeddedShellReadsPasswordFromEnvironment() throws Exception {
@@ -454,6 +507,13 @@ public final class MoveItTaskRunnerHarness {
     private static void assertContains(String actual, String expected, String description) {
         if (actual == null || !actual.contains(expected)) {
             throw new AssertionError(description + " expected to contain <" + expected
+                    + "> but was <" + actual + ">");
+        }
+    }
+
+    private static void assertNotContains(String actual, String unexpected, String description) {
+        if (actual != null && actual.contains(unexpected)) {
+            throw new AssertionError(description + " expected not to contain <" + unexpected
                     + "> but was <" + actual + ">");
         }
     }

@@ -3,7 +3,7 @@
 query_moveit_result() {
   RESULT_FOUND=0
   _report_nominal=$(json_escape "$NOMINAL_START")
-  _report_payload='{"predicate":"TaskID=='"$TASK_ID"';NominalStart==\"'"$_report_nominal"'\";Status=in=(\"Success\",\"Failure\")","orderBy":"!StartTime","maxCount":10}'
+  _report_payload='{"predicate":"TaskID=='"$TASK_ID"';NominalStart==\"'"$_report_nominal"'\"","orderBy":"!StartTime","maxCount":10}'
 
   authorized_http_execute \
     --request POST \
@@ -19,7 +19,6 @@ query_moveit_result() {
   RESULT_STATUS=$(json_get_string "$HTTP_BODY" Status)
   [ -n "$RESULT_STATUS" ] || return 0
 
-  RESULT_FOUND=1
   _report_task_name=$(json_get_string "$HTTP_BODY" TaskName)
   [ -n "$_report_task_name" ] && TASK_NAME=$_report_task_name
   RESULT_STATUS_CODE=$(json_get_number "$HTTP_BODY" StatusCode)
@@ -28,6 +27,12 @@ query_moveit_result() {
   RESULT_TOTAL_BYTES_SENT=$(json_get_number "$HTTP_BODY" TotalBytesSent)
   RESULT_STATUS_MESSAGE=$(json_get_string "$HTTP_BODY" StatusMsg)
   RESULT_END_TIME=$(json_get_string "$HTTP_BODY" EndTime)
+
+  # MOVEit can use terminal statuses other than Success or Failure, for example
+  # when no source files match. EndTime distinguishes those completed runs from
+  # records that are still queued or running.
+  [ -n "$RESULT_END_TIME" ] || return 0
+  RESULT_FOUND=1
 
   [ -n "$RESULT_STATUS_CODE" ] || RESULT_STATUS_CODE=-1
   [ -n "$RESULT_RUN_ID" ] || RESULT_RUN_ID=0
